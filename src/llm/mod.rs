@@ -1,7 +1,7 @@
 pub mod cerebras;
 pub mod cohere;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 // ── Base JSON format used by every section call ───────────────────────────────
 
@@ -96,74 +96,6 @@ pub struct LlmRequest {
     pub prompt: String,
     pub model: String,
     pub api_key: String,
-}
-
-// ── Single pattern generation ─────────────────────────────────────────────────
-
-pub async fn generate_strudel(
-    request: LlmRequest,
-    provider: &crate::cli::Provider,
-) -> Result<String> {
-    let raw = match provider {
-        crate::cli::Provider::Cerebras => cerebras::complete(&request).await?,
-        crate::cli::Provider::Cohere => cohere::complete(&request).await?,
-    };
-    Ok(extract_json(raw))
-}
-
-// ── Multi-section song generation ─────────────────────────────────────────────
-
-/// Generates all song sections by making one LLM call per section.
-/// Returns (section_name, pattern_json) pairs in order.
-pub async fn generate_sections(
-    style_prompt: &str,
-    provider: &crate::cli::Provider,
-    api_key: &str,
-    model: &str,
-) -> Result<Vec<(String, String)>> {
-    let mut results: Vec<(String, String)> = Vec::new();
-    let mut established_bpm: Option<u32> = None;
-
-    for spec in SONG_SECTIONS {
-        let bpm_line = match established_bpm {
-            Some(b) => format!("Use exactly BPM: {}. Do not change the tempo.", b),
-            None    => "Choose an appropriate BPM for the style (60–160).".to_string(),
-        };
-
-        let prompt = format!(
-            "Style: {style_prompt}\n\
-             Section: {} ({} bars)\n\
-             Role: {}\n\
-             {bpm_line}\n\n\
-             {FORMAT_RULES}",
-            spec.name, spec.bars, spec.role
-        );
-
-        let req = LlmRequest {
-            prompt,
-            model: model.to_string(),
-            api_key: api_key.to_string(),
-        };
-
-        let raw = match provider {
-            crate::cli::Provider::Cerebras => cerebras::complete(&req).await?,
-            crate::cli::Provider::Cohere   => cohere::complete(&req).await?,
-        };
-        let json = extract_json(raw);
-
-        // Extract BPM from the first section to lock it for the rest
-        if established_bpm.is_none() {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
-                if let Some(b) = val.get("bpm").and_then(|v| v.as_u64()) {
-                    established_bpm = Some(b as u32);
-                }
-            }
-        }
-
-        results.push((spec.name.to_string(), json));
-    }
-
-    Ok(results)
 }
 
 // ── Build an arrangement that fills target_secs ───────────────────────────────
