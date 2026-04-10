@@ -8,8 +8,6 @@ Describe the music you want in plain English. An LLM composes a layered pattern 
 Strudel-Ai "a dark techno groove with acid bass"
 ```
 
-https://github.com/user-attachments/assets/placeholder-demo.gif
-
 ---
 
 ## How it works
