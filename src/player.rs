@@ -69,14 +69,19 @@ pub fn render_section(pattern: &Pattern) -> Vec<f32> {
 // ── Play ──────────────────────────────────────────────────────────────────────
 
 pub fn play_pattern(pattern: &Pattern) -> Result<()> {
-    let wav = render_wav(pattern);
-    let duration_secs = (pattern.bars as f32 * 4.0 * 60.0) / pattern.bpm;
+    let stereo = generate_stereo(pattern);
+    let duration_secs = (stereo.len() / 2) as f32 / SAMPLE_RATE as f32;
     println!(
         "  {:<12}  {} bars · {} BPM · {:.1}s · {} events",
         "synthesizing".truecolor(100, 100, 140),
         pattern.bars, pattern.bpm as u32, duration_secs, pattern.events.len(),
     );
     println!();
+    let i16_samples: Vec<i16> = stereo
+        .iter()
+        .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+        .collect();
+    let wav = encode_wav(&i16_samples);
     let player = detect_player()?;
     play_wav_bytes(&wav, &player)
 }
@@ -103,6 +108,7 @@ pub fn play_song(sections: &[(String, Vec<f32>)], _target_secs: u32) -> Result<(
     }
 
     master_bus(&mut timeline);
+    trim_trailing_silence(&mut timeline);
 
     let i16_samples: Vec<i16> = timeline
         .iter()
@@ -267,7 +273,48 @@ fn generate_stereo(pattern: &Pattern) -> Vec<f32> {
         right[right_len - 1 - i] *= t;
     }
 
-    left.iter().zip(right.iter()).flat_map(|(&l, &r)| [l, r]).collect()
+    let mut stereo: Vec<f32> = left.iter().zip(right.iter()).flat_map(|(&l, &r)| [l, r]).collect();
+    trim_trailing_silence(&mut stereo);
+    stereo
+}
+
+/// Trim trailing silence from stereo-interleaved samples.
+/// Keeps a 50ms fade-out tail after the last audible sample.
+fn trim_trailing_silence(stereo: &mut Vec<f32>) {
+    let threshold = 0.0015; // ~-56dB — below audible
+    let tail = (0.05 * SAMPLE_RATE as f32) as usize * 2; // 50ms stereo tail
+
+    // Scan backwards for last audible stereo pair
+    let mut last_audible = 0;
+    let len = stereo.len();
+    let mut i = len;
+    while i >= 2 {
+        i -= 2;
+        if stereo[i].abs() > threshold || stereo[i + 1].abs() > threshold {
+            last_audible = i + 2;
+            break;
+        }
+    }
+
+    if last_audible == 0 {
+        return;
+    }
+
+    let end = std::cmp::min(last_audible + tail, len) & !1; // keep stereo-aligned
+    stereo.truncate(end);
+
+    // Gentle fade-out on the tail portion
+    let fade_len = std::cmp::min(tail, end - last_audible) / 2;
+    if fade_len > 0 {
+        for j in 0..fade_len {
+            let t = 1.0 - (j as f32 / fade_len as f32);
+            let idx = last_audible + j * 2;
+            if idx + 1 < stereo.len() {
+                stereo[idx] *= t;
+                stereo[idx + 1] *= t;
+            }
+        }
+    }
 }
 
 /// Master bus processing for full songs (applied to interleaved stereo)
